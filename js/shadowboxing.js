@@ -20,7 +20,7 @@ SHOW_SHADOW = true;
 var INPUT = "webcam"; 
 // A difference of >= SHADOW_THRESHOLD across RGB space from the background
 // frame is marked as foreground
-var SHADOW_THRESHOLD = 10;
+var SHADOW_THRESHOLD = 25;
 // Between 0 and 1: how much memory we retain of previous frames.
 // In other words, how much we let the background adapt over time to more recent frames
 var BACKGROUND_ALPHA = 0.05;
@@ -32,7 +32,7 @@ var STACK_BLUR_RADIUS = 10;
 /*
  * Begin shadowboxing code
  */
-var mediaStream, video, rawCanvas, rawContext, shadowCanvas, shadowContext, background = null;
+var mediaStream, video, rawCanvas, rawContext, shadowCanvas, shadowContext, rawCanvas2, rawContext2, shadowCanvas2, shadowContext2, splittingPixel = 0, background = null, background2 = null;
 var kinect, kinectSocket = null;
 
 var started = false;
@@ -49,10 +49,12 @@ $(document).ready(function() {
 
     $('#background').click(function() {
         setBackground();
+        setBackground2();
         if (!started) {
             renderShadow();
         }
     });
+
 });
 
 /*
@@ -65,22 +67,47 @@ function initializeDOMElements() {
     
     rawCanvas = document.createElement('canvas');
     rawCanvas.setAttribute('id', 'rawCanvas');
-    rawCanvas.setAttribute('width', 640);
-    rawCanvas.setAttribute('height', 480);
-    rawCanvas.style.display = SHOW_RAW ? 'block' : 'none';
+    rawCanvas.setAttribute('width', (document.documentElement.clientWidth / 2) - 10);
+    rawCanvas.setAttribute('height', (document.documentElement.clientHeight) - 120);
+    rawCanvas.style.display = SHOW_RAW ? 'inline' : 'none';
     document.getElementById('capture').appendChild(rawCanvas);
     rawContext = rawCanvas.getContext('2d');
     // mirror horizontally, so it acts like a reflection
     rawContext.translate(rawCanvas.width, 0);
     rawContext.scale(-1,1);    
     
+    
+    
     shadowCanvas = document.createElement('canvas');
     shadowCanvas.setAttribute('id', 'shadowCanvas');
-    shadowCanvas.setAttribute('width', 640);
-    shadowCanvas.setAttribute('height', 480);
-    shadowCanvas.style.display = SHOW_SHADOW ? 'block' : 'none';
+    shadowCanvas.setAttribute('width', (document.documentElement.clientWidth / 2) - 10);
+    shadowCanvas.setAttribute('height', (document.documentElement.clientHeight) - 120);
+    shadowCanvas.style.display = SHOW_SHADOW ? 'inline' : 'none';
     document.getElementById('capture').appendChild(shadowCanvas);
     shadowContext = shadowCanvas.getContext('2d');    
+
+	
+/*
+ * JUSTIN
+ * Second canvas, at default position. Right now it appears below first one.
+ */	
+	rawCanvas2 = document.createElement('canvas');
+	rawCanvas2.setAttribute('id', 'rawCanvas2');
+	rawCanvas2.setAttribute('width', (document.documentElement.clientWidth / 2) - 10);
+	rawCanvas2.setAttribute('height', (document.documentElement.clientHeight) - 120);
+	rawCanvas2.style.display = SHOW_RAW ? 'inline' : 'none';
+	document.getElementById('capture').appendChild(rawCanvas2);
+	rawContext2 = rawCanvas2.getContext('2d');
+	
+	
+	shadowCanvas2 = document.createElement('canvas');
+	shadowCanvas2.setAttribute('id', 'shadowCanvas2');
+	shadowCanvas2.setAttribute('width', (document.documentElement.clientWidth / 2) - 10);
+	shadowCanvas2.setAttribute('height', (document.documentElement.clientHeight) - 120);
+	shadowCanvas2.style.display = SHOW_SHADOW ? 'inline' : 'none';
+	document.getElementById('capture').appendChild(shadowCanvas2);
+	shadowContext2 = shadowCanvas2.getContext('2d');
+// END OF SECOND CANVAS CODE
 }
 
 
@@ -189,6 +216,21 @@ function getCameraData() {
 }
 
 /*
+ * JUSTIN
+ * Pure duplicate of getCameraData, for second canvas.
+ */
+
+function getCameraData2() {
+    if (mediaStream || kinect) {
+        rawContext2.drawImage(video, 0, 0, rawCanvas2.width, rawCanvas2.height);
+        stackBlurCanvasRGB('rawCanvas2', 0, 0, rawCanvas2.width, rawCanvas2.height, STACK_BLUR_RADIUS);        
+        var pixelData = rawContext2.getImageData(0, 0, rawCanvas2.width, rawCanvas2.height);
+        return pixelData;
+    }    
+}
+
+
+/*
  * Remembers the current pixels as the background to subtract.
  */
 function setBackground() {
@@ -196,17 +238,27 @@ function setBackground() {
     background = pixelData;
 }
 
+function setBackground2() {
+    var pixelData = getCameraData2();
+    background2 = pixelData;
+}
+
 /*
  * In a loop: gets the current frame of video, thresholds it to the background frames,
  * and outputs the difference as a shadow.
  */
 function renderShadow() {
-  if (!background) {
+  if (!background || !background2) {
     return;
   }
   
   pixelData = getShadowData();
   shadowContext.putImageData(pixelData, 0, 0);
+  
+  
+  
+  pixelData2 = getShadowData2();
+  shadowContext2.putImageData(pixelData2, 0, 0);
   setTimeout(renderShadow, 0);
 }
 
@@ -217,7 +269,9 @@ function renderShadow() {
 
 function getShadowData() {
     var pixelData = getCameraData();
-
+	var counter = 0;
+	var yOffset = 0;
+	
     // Each pixel gets four array indices: [r, g, b, alpha]
     for (var i=0; i<pixelData.data.length; i=i+4) {
         var rCurrent = pixelData.data[i];
@@ -232,6 +286,61 @@ function getShadowData() {
         
         if (distance >= SHADOW_THRESHOLD) {
             // foreground, show shadow
+            
+            var xCoord = ((i/4)/(yOffset+1)) - 1;
+            if(xCoord > splittingPixel) {
+            	splittingPixel = xCoord;
+            }
+            
+            pixelData.data[i] = 0;
+            pixelData.data[i+1] = 0;
+            pixelData.data[i+2] = 0;
+            
+        } else {
+            // background
+            
+            //  update model of background, since we think this is in the background
+            updateBackground(i, rCurrent, gCurrent, bCurrent, rBackground, gBackground, bBackground);
+            
+            // now set the background color
+            pixelData.data[i] = 255;
+            pixelData.data[i+1] = 255;
+            pixelData.data[i+2] = 255;
+            pixelData.data[i+3] = 0;
+        }   
+        if(counter == rawCanvas.width){
+        	yOffset++;
+        	counter = 0;	
+        } else {
+        	counter++;    
+        } 
+    }
+    
+    return pixelData; 
+}
+
+/*
+ * JUSTIN
+ * Pure duplicate of getshadowData, just for second canvas.
+ */
+
+function getShadowData2() {
+    var pixelData = getCameraData2();
+
+    // Each pixel gets four array indices: [r, g, b, alpha]
+    for (var i=0; i<pixelData.data.length; i=i+4) {
+        var rCurrent = pixelData.data[i];
+        var gCurrent = pixelData.data[i+1];
+        var bCurrent = pixelData.data[i+2];
+        
+        var rBackground = background2.data[i];
+        var gBackground = background2.data[i+1];
+        var bBackground = background2.data[i+2];
+        		
+        var distance = pixelDistance(rCurrent, gCurrent, bCurrent, rBackground, gBackground, bBackground);        
+        
+        if (distance >= SHADOW_THRESHOLD) {
+            // foreground, show shadow
             pixelData.data[i] = 0;
             pixelData.data[i+1] = 0;
             pixelData.data[i+2] = 0;
@@ -239,7 +348,7 @@ function getShadowData() {
             // background
             
             //  update model of background, since we think this is in the background
-            updateBackground(i, rCurrent, gCurrent, bCurrent, rBackground, gBackground, bBackground);
+            updateBackground2(i, rCurrent, gCurrent, bCurrent, rBackground, gBackground, bBackground);
             
             // now set the background color
             pixelData.data[i] = 255;
@@ -256,6 +365,12 @@ function updateBackground(i, rCurrent, gCurrent, bCurrent, rBackground, gBackgro
     background.data[i] = Math.round(BACKGROUND_ALPHA * rCurrent + (1-BACKGROUND_ALPHA) * rBackground);
     background.data[i+1] = Math.round(BACKGROUND_ALPHA * gCurrent + (1-BACKGROUND_ALPHA) * gBackground);
     background.data[i+2] = Math.round(BACKGROUND_ALPHA * bCurrent + (1-BACKGROUND_ALPHA) * bBackground);
+}
+
+function updateBackground2(i, rCurrent, gCurrent, bCurrent, rBackground, gBackground, bBackground) {
+    background2.data[i] = Math.round(BACKGROUND_ALPHA * rCurrent + (1-BACKGROUND_ALPHA) * rBackground);
+    background2.data[i+1] = Math.round(BACKGROUND_ALPHA * gCurrent + (1-BACKGROUND_ALPHA) * gBackground);
+    background2.data[i+2] = Math.round(BACKGROUND_ALPHA * bCurrent + (1-BACKGROUND_ALPHA) * bBackground);
 }
 
 /*
